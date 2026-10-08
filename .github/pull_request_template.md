@@ -14,5 +14,4 @@ Closes #
 - [✓] Hay pruebas que cubren el cambio, incluido un caso de error
 - [✓] La documentación afectada está actualizada (README, OpenAPI, comentarios de tabla)
 - [✓] Los criterios de aceptación del issue están marcados
-- [✓] Otra persona aprobó el PR
 - [✓] No se agregaron secretos ni datos reales

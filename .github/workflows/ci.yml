@@ -29,6 +29,10 @@ jobs:
         python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: Ilyavosky/kairo-bd
+          path: db
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -37,4 +41,11 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy .
       - run: uv run ruff format --check .
+      - name: Aplicar migraciones de kairo-bd
+        run: |
+          shopt -s nullglob
+          for f in db/migrations/*.sql; do
+            echo "Aplicando $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
       - run: uv run pytest
