@@ -1,7 +1,7 @@
 [project]
 name = "kairo-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "API de Kairo: gestor de actividades y tiempo con captura asistida por IA"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -24,3 +24,8 @@ dev = [
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
