@@ -4,6 +4,8 @@ from typing import Literal, Self
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+SECRETO_DESARROLLO = "secreto-solo-para-desarrollo-no-usar-en-produccion"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -12,6 +14,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/kairo_test"
     db_pool_min_size: int = 1
     db_pool_max_size: int = 5
+    db_role: str = ""
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
@@ -23,9 +26,14 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @model_validator(mode="after")
-    def exigir_secretos_en_produccion(self) -> Self:
-        if self.app_env == "production" and len(self.jwt_secret) < 32:
-            raise ValueError("JWT_SECRET requiere 32 caracteres o más en producción")
+    def validar_secretos(self) -> Self:
+        if self.app_env == "production":
+            if len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "JWT_SECRET requiere 32 caracteres o más en producción"
+                )
+        elif not self.jwt_secret:
+            self.jwt_secret = SECRETO_DESARROLLO
         return self
 
 

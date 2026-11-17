@@ -17,3 +17,13 @@ def test_produccion_exige_secreto_jwt_largo() -> None:
 def test_produccion_acepta_secreto_jwt_largo() -> None:
     settings = Settings(app_env="production", jwt_secret="x" * 32)
     assert settings.app_env == "production"
+
+
+def test_produccion_sin_secreto_jwt_falla() -> None:
+    with pytest.raises(ValidationError):
+        Settings(app_env="production", jwt_secret="")
+
+
+def test_desarrollo_sin_secreto_usa_uno_de_desarrollo() -> None:
+    settings = Settings(app_env="development", jwt_secret="")
+    assert len(settings.jwt_secret) >= 32
