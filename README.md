@@ -50,6 +50,21 @@ Todo bajo `/api/v1`. Autenticación con `Authorization: Bearer <token>`; el toke
 Las fechas con hora (`vence_en`) deben llevar zona horaria. Las filas de otro usuario
 responden 404, no 403. Esquema completo en `/docs`.
 
+## API (fase 2)
+
+| Ruta | Función |
+|---|---|
+| `GET/POST /eventos`, `GET/PATCH /eventos/{id}` | Eventos con `fin > inicio`; filtros `desde` y `hasta` (por traslape) y `materia_id` |
+| `GET/POST /etiquetas` | Etiquetas únicas por usuario sin distinguir mayúsculas |
+| `GET /actividades/{id}/etiquetas`, `PUT/DELETE /actividades/{id}/etiquetas/{etiqueta_id}` | Etiquetas de una actividad; `PUT` es idempotente |
+| `POST /temporizador/iniciar`, `POST /temporizador/detener`, `GET /temporizador/actual` | Una sesión en curso por usuario (409 si ya hay una); al detener se crea el registro de tiempo; sin pausa |
+| `GET/POST /registros-tiempo`, `GET/PATCH /registros-tiempo/{id}` | Filtros `desde`, `hasta`, `categoria_id` y `actividad_id`; el alta manual fija `origen = 'manual'` |
+| `GET/POST /metas`, `GET/PATCH /metas/{id}` | Tipo `tiempo_acumulado` (minutos) o `numero_eventos` (registros de tiempo), periodo `dia`, `semana` o `mes`; solo mínimos |
+| `GET /metas/{id}/progreso`, `GET /metas/historial` | Progreso del periodo actual calculado en SQL y evaluaciones de periodos cerrados |
+
+Los periodos de las metas se calculan en la zona horaria del usuario y la semana empieza
+el lunes. Requiere las migraciones 000 a 005 de `kairo-bd`.
+
 ## Estructura
 
 ```
