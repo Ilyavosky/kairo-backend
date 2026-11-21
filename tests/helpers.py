@@ -45,3 +45,30 @@ def ejecutar_como_administrador(
 ) -> None:
     with psycopg.connect(Settings().database_url, autocommit=True) as conn:
         conn.execute(consulta, parametros)
+
+
+def categoria_propia(
+    client: TestClient, sesion: Sesion, nombre: str = "Secreta"
+) -> str:
+    ejecutar_como_administrador(
+        "insert into categoria_actividad (usuario_id, nombre, ambito) "
+        "values (%s, %s, 'personal')",
+        (sesion.id, nombre),
+    )
+    respuesta = client.get("/api/v1/categorias", headers=sesion.headers)
+    for categoria in respuesta.json():
+        if categoria["nombre"] == nombre and not categoria["del_sistema"]:
+            return str(categoria["id"])
+    raise AssertionError(f"no existe la categoria propia {nombre}")
+
+
+def crear_actividad(
+    client: TestClient, sesion: Sesion, titulo: str = "Entregar reporte"
+) -> str:
+    respuesta = client.post(
+        "/api/v1/actividades",
+        json={"titulo": titulo, "categoria_id": categoria_id(client, sesion)},
+        headers=sesion.headers,
+    )
+    assert respuesta.status_code == 201, respuesta.text
+    return str(respuesta.json()["id"])
