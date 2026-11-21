@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health
+from app.api import health, v1
 from app.core.config import get_settings
 from app.core.db import crear_pool
 from app.core.errors import registrar_manejadores
@@ -56,6 +56,7 @@ def create_app() -> FastAPI:
 
     registrar_manejadores(app)
     app.include_router(health.router)
+    app.include_router(v1.router)
     return app
 
 
