@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     llm_model: str = "openai/gpt-oss-20b"
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_timeout_s: float = 10.0
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    interno_secret: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:
