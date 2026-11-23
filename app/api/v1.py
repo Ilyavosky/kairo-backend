@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.modules.actividades.router import router as actividades
 from app.modules.auth.router import router as auth
 from app.modules.calendario.router import router as calendario
+from app.modules.capturas.router import router as capturas
 from app.modules.categorias.router import router as categorias
 from app.modules.etiquetas.router import router as etiquetas
 from app.modules.eventos.router import router as eventos
@@ -22,3 +23,4 @@ router.include_router(registros_tiempo)
 router.include_router(temporizador)
 router.include_router(metas)
 router.include_router(calendario)
+router.include_router(capturas)
