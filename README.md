@@ -32,6 +32,8 @@ La documentación interactiva queda en `http://localhost:8000/docs`.
 | `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES` | Parámetros del token de acceso |
 | `CORS_ORIGINS` | Orígenes permitidos, separados por coma |
 | `LOG_LEVEL` | Nivel de logging; la salida es JSON, una línea por evento |
+| `LLM_API_KEY` | Clave del proveedor del LLM (Groq). Sin ella `POST /capturas` responde 503 y la app usa el formulario manual |
+| `LLM_MODEL`, `LLM_BASE_URL`, `LLM_TIMEOUT_S` | Modelo (por defecto `openai/gpt-oss-20b`), URL compatible con OpenAI y tiempo máximo por llamada |
 
 ## API (fase 1)
 
@@ -65,6 +67,45 @@ responden 404, no 403. Esquema completo en `/docs`.
 Los periodos de las metas se calculan en la zona horaria del usuario y la semana empieza
 el lunes. Requiere las migraciones 000 a 005 de `kairo-bd`.
 
+## API (fase 3)
+
+| Ruta | Función |
+|---|---|
+| `POST /capturas` | Recibe `{"texto": "..."}`, guarda el mensaje y devuelve la propuesta ya resuelta (201) con estado `pendiente` |
+| `GET /capturas/{id}` | Propuesta vigente; las pendientes viven en la base, no en memoria |
+| `POST /capturas/{id}/confirmar` | Inserta la fila real (actividad, registro de tiempo o meta). Idempotente: confirmar dos veces devuelve el mismo resultado |
+| `POST /capturas/{id}/corregir` | Recibe `{"campos": {...}}` con los campos cambiados, los guarda como correcciones e inserta la fila corregida |
+| `POST /capturas/{id}/descartar` | Cierra sin insertar. Idempotente |
+| `GET /capturas/metricas` | Por tipo: aceptadas, corregidas, descartadas, `porcentaje_sin_correccion` y `promedio_campos_corregidos` |
+
+La respuesta trae `campos` (la propuesta resuelta, con la forma del `POST` de la entidad),
+`pendientes` (campos que el sistema no pudo resolver) y `resultado_id` (la fila creada tras
+confirmar o corregir).
+
+- **El modelo propone nombres; el código resuelve.** Materia y categoría se buscan entre las del
+  usuario sin acentos ni mayúsculas. Si no hay coincidencia única, el campo queda vacío y aparece
+  en `pendientes`. Las fechas relativas ("el viernes", "mañana a las 5 pm") se calculan en código
+  con la zona horaria del usuario.
+- **Reglas de fecha.** Una actividad sin hora vence a las 23:59. "La próxima semana" es el lunes
+  siguiente. Una fecha pasada o una hora ambigua ("a las 5") no se adivinan: el campo queda en
+  `pendientes`. Un registro de tiempo sin fecha termina ahora; con día pero sin hora no se inventa
+  el inicio.
+- **Qué exige confirmar.** Los campos obligatorios de la entidad (por ejemplo `categoria_id`).
+  Si faltan, `422` con `codigo = "captura_incompleta"`. Los opcionales marcados en `pendientes`
+  se confirman vacíos.
+- **Respaldo.** Si el proveedor falla, agota el tiempo o devuelve JSON inválido tras un
+  reintento, la respuesta es `503` con `codigo = "extraccion_no_disponible"` y no se guarda nada;
+  la app abre el formulario manual.
+- **Estados.** `pendiente`, `aceptada`, `corregida` y `descartada`. Confirmar una descartada o
+  corregir y descartar una ya confirmada responde `409`.
+- **Límite conocido.** La conexión del pool queda tomada mientras se espera al LLM (hasta dos
+  intentos de `LLM_TIMEOUT_S`); con el pool de 5 conexiones, varias capturas simultáneas lentas
+  pueden agotarlo.
+
+Requiere las migraciones 000 a 007 de `kairo-bd`. Para medir el porcentaje aceptado sin
+corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mensajes.txt
+--materias "Redes,Cálculo"` (un mensaje por línea; imprime la propuesta resuelta de cada uno).
+
 ## Estructura
 
 ```
@@ -72,6 +113,7 @@ app/
   main.py        creación de la app, CORS, lifespan del pool y registro de peticiones
   api/           salud y router `/api/v1`
   modules/       un paquete por recurso: router, repository, schemas (y service)
+  services/      extracción con LLM, resolución de referencias y fechas
   core/
     config.py    configuración tipada
     db.py        pool, transacción por petición y usuario para la RLS
