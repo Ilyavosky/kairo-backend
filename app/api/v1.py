@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 
 from app.modules.actividades.router import router as actividades
-from app.modules.autoevaluaciones.router import router as autoevaluaciones
 from app.modules.auth.router import router as auth
+from app.modules.autoevaluaciones.router import router as autoevaluaciones
 from app.modules.calendario.router import router as calendario
 from app.modules.capturas.router import router as capturas
 from app.modules.categorias.router import router as categorias
