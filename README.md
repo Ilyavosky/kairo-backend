@@ -106,6 +106,41 @@ Requiere las migraciones 000 a 007 de `kairo-bd`. Para medir el porcentaje acept
 corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mensajes.txt
 --materias "Redes,Cálculo"` (un mensaje por línea; imprime la propuesta resuelta de cada uno).
 
+## API (fase 4)
+
+| Ruta | Función |
+|---|---|
+| `GET/POST /recordatorios` | Lista y crea avisos. Cada uno apunta a exactamente una actividad, un evento o una meta; `momento` debe traer zona horaria |
+| `PATCH /recordatorios/{id}` | Reprograma (`momento`) o cancela (`estado_envio = "cancelado"`) solo mientras esté `pendiente`; después, 409 `recordatorio_cerrado` |
+| `GET /autoevaluaciones` | Últimas semanas evaluadas |
+| `GET/PUT /autoevaluaciones/{semana}` | `semana` es el lunes (`2026-11-16`). El `PUT` crea o actualiza `estado_animo`, `satisfaccion` (1 a 5) y `nota`; rechaza lunes inexistentes y semanas futuras |
+| `POST /telegram/vinculo` | Con sesión: devuelve un código de 8 caracteres que vale 10 minutos y se canjea una vez |
+| `POST /telegram/webhook` | Lo llama Telegram; exige la cabecera `X-Telegram-Bot-Api-Secret-Token` |
+| `POST /interno/recordatorios/despachar` | Lo llama `pg_cron` cada 5 minutos con `Authorization: Bearer INTERNO_SECRET`; no aparece en el OpenAPI |
+
+- **Vinculación.** El usuario genera el código en la app y envía `/vincular CODIGO` al bot. Solo se
+  guarda el SHA-256 del código. `kairo_app` ya no puede escribir `telegram_id` directamente: lo
+  fija la función `kairo_vincular_telegram`, y un Telegram que ya pertenece a otra cuenta no
+  consume el código.
+- **El bot es un adaptador.** Un Telegram sin vincular solo recibe instrucciones. Una vez
+  vinculado: `/tarea <título>`, `/timer [categoría|stop]`, `/meta`, `/ayuda`. El texto libre pasa
+  por el mismo pipeline de `/capturas` y el bot responde con botones Confirmar y Descartar que
+  llaman a los mismos servicios. Si falla el proveedor de IA, el bot lo dice y no guarda nada.
+- **Despacho.** Corre con `set local role kairo_worker`, que solo puede leer lo necesario para armar
+  el texto y actualizar `estado_envio`, `intentos`, `enviado_en` y `ultimo_error`. Toma hasta 20
+  pendientes vencidos con `for update skip locked`, de modo que dos ejecuciones simultáneas no
+  envían lo mismo. Un fallo se reintenta en el siguiente ciclo y al tercero queda `fallido`; un
+  usuario sin Telegram queda `fallido` de inmediato.
+- **Límite conocido.** Si Telegram acepta el mensaje y la transacción falla al confirmar, el
+  recordatorio se reenvía en el siguiente ciclo (entrega al menos una vez).
+- **Webhook.** Se registra una vez con `setWebhook` indicando `url` y `secret_token`
+  (el mismo valor de `TELEGRAM_WEBHOOK_SECRET`). El servicio siempre responde 200 a un
+  update con secreto válido, aunque falle internamente, para que Telegram no reintente en bucle.
+
+Requiere las migraciones 000 a 010 de `kairo-bd`. Variables nuevas: `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET` (mínimo 32 caracteres aleatorios). Con
+cualquiera de los dos secretos vacío, su endpoint rechaza todo.
+
 ## Estructura
 
 ```
@@ -113,7 +148,7 @@ app/
   main.py        creación de la app, CORS, lifespan del pool y registro de peticiones
   api/           salud y router `/api/v1`
   modules/       un paquete por recurso: router, repository, schemas (y service)
-  services/      extracción con LLM, resolución de referencias y fechas
+  services/      extracción con LLM, resolución de referencias y fechas, cliente de Telegram
   core/
     config.py    configuración tipada
     db.py        pool, transacción por petición y usuario para la RLS
@@ -155,5 +190,5 @@ RLS no se aplica y no probarían nada.
 
 `render.yaml` define un servicio web con Docker y `healthCheckPath: /health`. Variables
 que se capturan a mano en Render: `DATABASE_URL` (cadena del pooler de Supabase con
-`sslmode=require`), `JWT_SECRET` y `CORS_ORIGINS`. El plan gratuito se apaga a los 15
+`sslmode=require`), `JWT_SECRET`, `CORS_ORIGINS`, `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET`. El plan gratuito se apaga a los 15
 minutos sin tráfico y la primera petición tarda cerca de un minuto.
