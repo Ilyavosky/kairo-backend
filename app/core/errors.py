@@ -9,24 +9,37 @@ logger = logging.getLogger(__name__)
 
 
 class ErrorApi(Exception):
-    def __init__(self, status_code: int, codigo: str, detalle: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        codigo: str,
+        detalle: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(detalle)
         self.status_code = status_code
         self.codigo = codigo
         self.detalle = detalle
+        self.headers = headers
 
 
-def respuesta_error(status_code: int, codigo: str, detalle: str) -> JSONResponse:
+def respuesta_error(
+    status_code: int,
+    codigo: str,
+    detalle: str,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"codigo": codigo, "detalle": detalle},
+        headers=headers,
     )
 
 
 async def manejar_error_api(_: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, ErrorApi):
         raise exc
-    return respuesta_error(exc.status_code, exc.codigo, exc.detalle)
+    return respuesta_error(exc.status_code, exc.codigo, exc.detalle, exc.headers)
 
 
 async def manejar_validacion(_: Request, exc: Exception) -> JSONResponse:
