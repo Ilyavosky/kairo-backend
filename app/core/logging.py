@@ -21,3 +21,5 @@ def configurar_logging(nivel: str) -> None:
     raiz = logging.getLogger()
     raiz.handlers = [handler]
     raiz.setLevel(nivel.upper())
+    for ruidoso in ("httpx", "httpcore"):
+        logging.getLogger(ruidoso).setLevel(logging.WARNING)

@@ -20,16 +20,24 @@ class ClienteTelegram(Protocol):
 
 
 class ClienteTelegramHttp:
-    def __init__(self, token: str, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self,
+        token: str,
+        timeout_s: float = 10.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._token = token
         self._timeout_s = timeout_s
+        self._transport = transport
 
     async def _llamar(self, metodo: str, cuerpo: dict[str, Any]) -> None:
         if not self._token:
             raise TelegramError("sin_token")
         url = f"https://api.telegram.org/bot{self._token}/{metodo}"
         try:
-            async with httpx.AsyncClient(timeout=self._timeout_s) as http:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_s, transport=self._transport
+            ) as http:
                 respuesta = await http.post(url, json=cuerpo)
         except httpx.HTTPError as exc:
             raise TelegramError(type(exc).__name__) from exc
