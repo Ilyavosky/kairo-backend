@@ -13,6 +13,7 @@ from app.modules.materias.router import router as materias
 from app.modules.metas.router import router as metas
 from app.modules.recordatorios.router import router as recordatorios
 from app.modules.registros_tiempo.router import router as registros_tiempo
+from app.modules.reportes.router import router as reportes
 from app.modules.telegram.router import router as telegram
 from app.modules.temporizador.router import router as temporizador
 
@@ -32,3 +33,4 @@ router.include_router(recordatorios)
 router.include_router(autoevaluaciones)
 router.include_router(telegram)
 router.include_router(interno)
+router.include_router(reportes)
