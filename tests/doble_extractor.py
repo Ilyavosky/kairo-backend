@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -42,6 +44,7 @@ def actividad(
     fecha_texto: str | None = None,
     hora_texto: str | None = None,
     prioridad: int | None = None,
+    modalidad: Literal["presencial", "en_linea", "mixta"] | None = None,
 ) -> PropuestaActividad:
     return PropuestaActividad(
         entidad_tipo="actividad",
@@ -52,7 +55,7 @@ def actividad(
         fecha_texto=fecha_texto,
         hora_texto=hora_texto,
         prioridad=prioridad,
-        modalidad=None,
+        modalidad=modalidad,
     )
 
 

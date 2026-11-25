@@ -216,7 +216,9 @@ def test_texto_libre_crea_una_captura_con_botones_y_confirma(
 ) -> None:
     tid = nuevo_id()
     vincular(client, ana, telegram, tid)
-    usar_extractor(client, ExtractorFalso(actividad("Entregar reporte")))
+    usar_extractor(
+        client, ExtractorFalso(actividad("Entregar reporte", modalidad="presencial"))
+    )
     enviar(client, mensaje(tid, "entregar reporte de redes"))
     _, texto, botones = telegram.enviados[-1]
     assert "Entregar reporte" in texto
@@ -234,7 +236,9 @@ def test_descartar_desde_el_boton_no_crea_nada(
 ) -> None:
     tid = nuevo_id()
     vincular(client, ana, telegram, tid)
-    usar_extractor(client, ExtractorFalso(actividad("Entregar reporte")))
+    usar_extractor(
+        client, ExtractorFalso(actividad("Entregar reporte", modalidad="presencial"))
+    )
     enviar(client, mensaje(tid, "entregar reporte"))
     botones = telegram.enviados[-1][2]
     assert botones is not None
@@ -252,7 +256,7 @@ def test_un_boton_ajeno_no_confirma_la_captura_de_otro(
     tid_ana, tid_beto = nuevo_id(), nuevo_id()
     vincular(client, ana, telegram, tid_ana)
     vincular(client, beto, telegram, tid_beto)
-    usar_extractor(client, ExtractorFalso(actividad("De Ana")))
+    usar_extractor(client, ExtractorFalso(actividad("De Ana", modalidad="presencial")))
     enviar(client, mensaje(tid_ana, "algo de ana"))
     botones = telegram.enviados[-1][2]
     assert botones is not None

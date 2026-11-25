@@ -128,6 +128,11 @@ corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mens
   vinculado: `/tarea <título>`, `/timer [categoría|stop]`, `/meta`, `/ayuda`. El texto libre pasa
   por el mismo pipeline de `/capturas` y el bot responde con botones Confirmar y Descartar que
   llaman a los mismos servicios. Si falla el proveedor de IA, el bot lo dice y no guarda nada.
+- **Mensajes legibles.** El bot muestra fechas como `vie 27 nov, 23:59` en la zona del usuario y los
+  nombres de categoría y materia, no identificadores. Si el mensaje no dice la modalidad de una
+  actividad, pregunta con botones (Presencial, En línea, Mixta) y guarda al elegir; esa elección
+  no cuenta como corrección en las métricas del pipeline. `/start CODIGO` vincula igual que
+  `/vincular CODIGO`, para abrir el bot desde la app con `https://t.me/<bot>?start=CODIGO`.
 - **Despacho.** Corre con `set local role kairo_worker`, que solo puede leer lo necesario para armar
   el texto y actualizar `estado_envio`, `intentos`, `enviado_en` y `ultimo_error`. Toma hasta 20
   pendientes vencidos con `for update skip locked`, de modo que dos ejecuciones simultáneas no
