@@ -1,6 +1,9 @@
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -22,6 +25,7 @@ from app.modules.telegram.schemas import (
 )
 from app.modules.temporizador import repository as temporizador
 from app.services.extraccion import Extractor
+from app.services.formato import fecha_legible
 from app.services.telegram import Boton, ClienteTelegram, TelegramError
 from app.services.texto import normalizar
 
@@ -51,19 +55,110 @@ class Respuesta:
     botones: list[Boton] | None = None
 
 
-def _resumen_captura(captura: CapturaOut) -> Respuesta:
-    nombres = {
+ETIQUETAS = {
+    "titulo": "Título",
+    "descripcion": "Descripción",
+    "vence_en": "Vence",
+    "materia_id": "Materia",
+    "categoria_id": "Categoría",
+    "prioridad": "Prioridad",
+    "modalidad": "Modalidad",
+    "actividad_id": "Actividad",
+    "inicio": "Inicio",
+    "fin": "Fin",
+    "nota": "Nota",
+    "tipo": "Tipo",
+    "periodo": "Periodo",
+    "objetivo": "Objetivo",
+    "vigente_desde": "Desde",
+    "vigente_hasta": "Hasta",
+}
+ORDEN = {
+    "actividad": [
+        "titulo",
+        "vence_en",
+        "materia_id",
+        "categoria_id",
+        "prioridad",
+        "modalidad",
+        "descripcion",
+    ],
+    "registro_tiempo": ["categoria_id", "inicio", "fin", "nota"],
+    "meta": [
+        "categoria_id",
+        "tipo",
+        "periodo",
+        "objetivo",
+        "vigente_desde",
+        "vigente_hasta",
+    ],
+}
+FECHAS = {"vence_en", "inicio", "fin", "vigente_desde", "vigente_hasta"}
+PRIORIDADES = {1: "muy baja", 2: "baja", 3: "media", 4: "alta", 5: "muy alta"}
+MODALIDADES = {"p": "presencial", "l": "en_linea", "x": "mixta"}
+NOMBRES_MODALIDAD = {
+    "presencial": "Presencial",
+    "en_linea": "En línea",
+    "mixta": "Mixta",
+}
+
+
+def _valor_legible(
+    campo: str,
+    valor: Any,
+    nombres: dict[str, str],
+    zona: ZoneInfo,
+    ahora: datetime,
+) -> str:
+    if campo in {"materia_id", "categoria_id"}:
+        return nombres.get(str(valor), "—")
+    if campo in FECHAS:
+        return fecha_legible(str(valor), zona, ahora)
+    if campo == "prioridad":
+        return f"{valor} ({PRIORIDADES.get(valor, '—')})"
+    if campo == "modalidad":
+        return NOMBRES_MODALIDAD.get(str(valor), str(valor))
+    if campo in {"tipo", "periodo"}:
+        return str(valor).replace("_", " ").capitalize()
+    return str(valor)
+
+
+async def _resumen_captura(
+    ctx: Contexto, captura: CapturaOut, preguntar_modalidad: bool = False
+) -> Respuesta:
+    nombres_entidad = {
         "actividad": "una actividad",
         "registro_tiempo": "un registro de tiempo",
         "meta": "una meta",
     }
-    lineas = [f"Entendí {nombres[captura.entidad_tipo]}:"]
-    lineas += [f"- {k}: {v}" for k, v in captura.campos.items() if v is not None]
+    zona = ZoneInfo(await capturas_repo.zona_horaria(ctx.conn, ctx.usuario_id))
+    catalogo = [
+        *await capturas_repo.categorias(ctx.conn),
+        *await capturas_repo.materias_activas(ctx.conn),
+    ]
+    nombres = {str(identificador): nombre for identificador, nombre in catalogo}
+    ahora = datetime.now(UTC)
+    omitidos = {"modalidad"} if preguntar_modalidad else set()
+    lineas = [f"Entendí {nombres_entidad[captura.entidad_tipo]}:"]
+    for campo in ORDEN[captura.entidad_tipo]:
+        valor = captura.campos.get(campo)
+        if valor is None or campo in omitidos:
+            continue
+        legible = _valor_legible(campo, valor, nombres, zona, ahora)
+        lineas.append(f"• {ETIQUETAS[campo]}: {legible}")
     descartar: Boton = ("Descartar", f"d:{captura.id}")
     if captura.pendientes:
-        lineas.append("Falta: " + ", ".join(captura.pendientes))
+        faltantes = ", ".join(ETIQUETAS.get(p, p).lower() for p in captura.pendientes)
+        lineas.append("Falta: " + faltantes)
         lineas.append("Complétalo en la app o descarta este borrador.")
         return Respuesta("\n".join(lineas), [descartar])
+    if preguntar_modalidad:
+        lineas.append("¿Qué modalidad tiene? Elige una para guardarla.")
+        opciones: list[Boton] = [
+            (NOMBRES_MODALIDAD[nombre], f"m:{captura.id}:{letra}")
+            for letra, nombre in MODALIDADES.items()
+        ]
+        return Respuesta("\n".join(lineas), [*opciones, descartar])
     lineas.append("¿Lo guardo?")
     return Respuesta("\n".join(lineas), [("Confirmar", f"c:{captura.id}"), descartar])
 
@@ -143,7 +238,12 @@ async def _captura(ctx: Contexto, extractor: Extractor, texto: str) -> Respuesta
     if len(texto) > LIMITE_MENSAJE:
         return Respuesta(f"El mensaje es muy largo; el máximo es {LIMITE_MENSAJE}.")
     captura = await capturas.crear(ctx, extractor, texto)
-    return _resumen_captura(captura)
+    sin_modalidad = (
+        captura.entidad_tipo == "actividad"
+        and not captura.pendientes
+        and await capturas_repo.modalidad_propuesta(ctx.conn, captura.id) is None
+    )
+    return await _resumen_captura(ctx, captura, sin_modalidad)
 
 
 async def _atender(
@@ -209,13 +309,20 @@ async def _mensaje(
 
 
 async def _resolver_callback(
-    conn: Conexion, telegram_id: int, accion: str, captura_id: UUID
+    conn: Conexion,
+    telegram_id: int,
+    accion: str,
+    captura_id: UUID,
+    modalidad: str | None = None,
 ) -> Respuesta:
     usuario_id = await repository.usuario_por_telegram(conn, telegram_id)
     if usuario_id is None:
         return Respuesta(SIN_VINCULO)
     await fijar_usuario(conn, usuario_id)
     ctx = Contexto(conn=conn, usuario_id=usuario_id)
+    if accion == "m" and modalidad is not None:
+        await capturas.confirmar_con(ctx, captura_id, {"modalidad": modalidad})
+        return Respuesta(f"Guardado. Modalidad: {NOMBRES_MODALIDAD[modalidad]}.")
     if accion == "c":
         await capturas.confirmar(ctx, captura_id)
         return Respuesta("Guardado.")
@@ -231,16 +338,22 @@ async def _callback(
     except TelegramError as exc:
         logger.warning("no se pudo responder el callback: %s", exc)
     accion, _, dato = (callback.data or "").partition(":")
+    modalidad: str | None = None
+    if accion == "m":
+        dato, _, letra = dato.partition(":")
+        modalidad = MODALIDADES.get(letra)
+        if modalidad is None:
+            return
     try:
         captura_id = UUID(dato)
     except ValueError:
         return
-    if accion not in {"c", "d"}:
+    if accion not in {"c", "d", "m"}:
         return
     try:
         async with transaccion(pool) as conn:
             respuesta = await _resolver_callback(
-                conn, callback.remitente.id, accion, captura_id
+                conn, callback.remitente.id, accion, captura_id, modalidad
             )
     except ErrorApi as exc:
         respuesta = Respuesta(exc.detalle)
