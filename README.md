@@ -32,6 +32,8 @@ La documentación interactiva queda en `http://localhost:8000/docs`.
 | `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES` | Parámetros del token de acceso |
 | `CORS_ORIGINS` | Orígenes permitidos, separados por coma |
 | `LOG_LEVEL` | Nivel de logging; la salida es JSON, una línea por evento |
+| `LLM_API_KEY` | Clave del proveedor del LLM (Groq). Sin ella `POST /capturas` responde 503 y la app usa el formulario manual |
+| `LLM_MODEL`, `LLM_BASE_URL`, `LLM_TIMEOUT_S` | Modelo (por defecto `openai/gpt-oss-20b`), URL compatible con OpenAI y tiempo máximo por llamada |
 
 ## API (fase 1)
 
@@ -65,6 +67,80 @@ responden 404, no 403. Esquema completo en `/docs`.
 Los periodos de las metas se calculan en la zona horaria del usuario y la semana empieza
 el lunes. Requiere las migraciones 000 a 005 de `kairo-bd`.
 
+## API (fase 3)
+
+| Ruta | Función |
+|---|---|
+| `POST /capturas` | Recibe `{"texto": "..."}`, guarda el mensaje y devuelve la propuesta ya resuelta (201) con estado `pendiente` |
+| `GET /capturas/{id}` | Propuesta vigente; las pendientes viven en la base, no en memoria |
+| `POST /capturas/{id}/confirmar` | Inserta la fila real (actividad, registro de tiempo o meta). Idempotente: confirmar dos veces devuelve el mismo resultado |
+| `POST /capturas/{id}/corregir` | Recibe `{"campos": {...}}` con los campos cambiados, los guarda como correcciones e inserta la fila corregida |
+| `POST /capturas/{id}/descartar` | Cierra sin insertar. Idempotente |
+| `GET /capturas/metricas` | Por tipo: aceptadas, corregidas, descartadas, `porcentaje_sin_correccion` y `promedio_campos_corregidos` |
+
+La respuesta trae `campos` (la propuesta resuelta, con la forma del `POST` de la entidad),
+`pendientes` (campos que el sistema no pudo resolver) y `resultado_id` (la fila creada tras
+confirmar o corregir).
+
+- **El modelo propone nombres; el código resuelve.** Materia y categoría se buscan entre las del
+  usuario sin acentos ni mayúsculas. Si no hay coincidencia única, el campo queda vacío y aparece
+  en `pendientes`. Las fechas relativas ("el viernes", "mañana a las 5 pm") se calculan en código
+  con la zona horaria del usuario.
+- **Reglas de fecha.** Una actividad sin hora vence a las 23:59. "La próxima semana" es el lunes
+  siguiente. Una fecha pasada o una hora ambigua ("a las 5") no se adivinan: el campo queda en
+  `pendientes`. Un registro de tiempo sin fecha termina ahora; con día pero sin hora no se inventa
+  el inicio.
+- **Qué exige confirmar.** Los campos obligatorios de la entidad (por ejemplo `categoria_id`).
+  Si faltan, `422` con `codigo = "captura_incompleta"`. Los opcionales marcados en `pendientes`
+  se confirman vacíos.
+- **Respaldo.** Si el proveedor falla, agota el tiempo o devuelve JSON inválido tras un
+  reintento, la respuesta es `503` con `codigo = "extraccion_no_disponible"` y no se guarda nada;
+  la app abre el formulario manual.
+- **Estados.** `pendiente`, `aceptada`, `corregida` y `descartada`. Confirmar una descartada o
+  corregir y descartar una ya confirmada responde `409`.
+- **Límite conocido.** La conexión del pool queda tomada mientras se espera al LLM (hasta dos
+  intentos de `LLM_TIMEOUT_S`); con el pool de 5 conexiones, varias capturas simultáneas lentas
+  pueden agotarlo.
+
+Requiere las migraciones 000 a 007 de `kairo-bd`. Para medir el porcentaje aceptado sin
+corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mensajes.txt
+--materias "Redes,Cálculo"` (un mensaje por línea; imprime la propuesta resuelta de cada uno).
+
+## API (fase 4)
+
+| Ruta | Función |
+|---|---|
+| `GET/POST /recordatorios` | Lista y crea avisos. Cada uno apunta a exactamente una actividad, un evento o una meta; `momento` debe traer zona horaria |
+| `PATCH /recordatorios/{id}` | Reprograma (`momento`) o cancela (`estado_envio = "cancelado"`) solo mientras esté `pendiente`; después, 409 `recordatorio_cerrado` |
+| `GET /autoevaluaciones` | Últimas semanas evaluadas |
+| `GET/PUT /autoevaluaciones/{semana}` | `semana` es el lunes (`2026-11-16`). El `PUT` crea o actualiza `estado_animo`, `satisfaccion` (1 a 5) y `nota`; rechaza lunes inexistentes y semanas futuras |
+| `POST /telegram/vinculo` | Con sesión: devuelve un código de 8 caracteres que vale 10 minutos y se canjea una vez |
+| `POST /telegram/webhook` | Lo llama Telegram; exige la cabecera `X-Telegram-Bot-Api-Secret-Token` |
+| `POST /interno/recordatorios/despachar` | Lo llama `pg_cron` cada 5 minutos con `Authorization: Bearer INTERNO_SECRET`; no aparece en el OpenAPI |
+
+- **Vinculación.** El usuario genera el código en la app y envía `/vincular CODIGO` al bot. Solo se
+  guarda el SHA-256 del código. `kairo_app` ya no puede escribir `telegram_id` directamente: lo
+  fija la función `kairo_vincular_telegram`, y un Telegram que ya pertenece a otra cuenta no
+  consume el código.
+- **El bot es un adaptador.** Un Telegram sin vincular solo recibe instrucciones. Una vez
+  vinculado: `/tarea <título>`, `/timer [categoría|stop]`, `/meta`, `/ayuda`. El texto libre pasa
+  por el mismo pipeline de `/capturas` y el bot responde con botones Confirmar y Descartar que
+  llaman a los mismos servicios. Si falla el proveedor de IA, el bot lo dice y no guarda nada.
+- **Despacho.** Corre con `set local role kairo_worker`, que solo puede leer lo necesario para armar
+  el texto y actualizar `estado_envio`, `intentos`, `enviado_en` y `ultimo_error`. Toma hasta 20
+  pendientes vencidos con `for update skip locked`, de modo que dos ejecuciones simultáneas no
+  envían lo mismo. Un fallo se reintenta en el siguiente ciclo y al tercero queda `fallido`; un
+  usuario sin Telegram queda `fallido` de inmediato.
+- **Límite conocido.** Si Telegram acepta el mensaje y la transacción falla al confirmar, el
+  recordatorio se reenvía en el siguiente ciclo (entrega al menos una vez).
+- **Webhook.** Se registra una vez con `setWebhook` indicando `url` y `secret_token`
+  (el mismo valor de `TELEGRAM_WEBHOOK_SECRET`). El servicio siempre responde 200 a un
+  update con secreto válido, aunque falle internamente, para que Telegram no reintente en bucle.
+
+Requiere las migraciones 000 a 010 de `kairo-bd`. Variables nuevas: `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET` (mínimo 32 caracteres aleatorios). Con
+cualquiera de los dos secretos vacío, su endpoint rechaza todo.
+
 ## Estructura
 
 ```
@@ -72,6 +148,7 @@ app/
   main.py        creación de la app, CORS, lifespan del pool y registro de peticiones
   api/           salud y router `/api/v1`
   modules/       un paquete por recurso: router, repository, schemas (y service)
+  services/      extracción con LLM, resolución de referencias y fechas, cliente de Telegram
   core/
     config.py    configuración tipada
     db.py        pool, transacción por petición y usuario para la RLS
@@ -113,5 +190,5 @@ RLS no se aplica y no probarían nada.
 
 `render.yaml` define un servicio web con Docker y `healthCheckPath: /health`. Variables
 que se capturan a mano en Render: `DATABASE_URL` (cadena del pooler de Supabase con
-`sslmode=require`), `JWT_SECRET` y `CORS_ORIGINS`. El plan gratuito se apaga a los 15
+`sslmode=require`), `JWT_SECRET`, `CORS_ORIGINS`, `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET`. El plan gratuito se apaga a los 15
 minutos sin tráfico y la primera petición tarda cerca de un minuto.

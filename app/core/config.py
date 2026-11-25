@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
+    llm_api_key: str = ""
+    llm_model: str = "openai/gpt-oss-20b"
+    llm_base_url: str = "https://api.groq.com/openai/v1"
+    llm_timeout_s: float = 10.0
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    interno_secret: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:
