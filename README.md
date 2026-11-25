@@ -34,6 +34,8 @@ La documentación interactiva queda en `http://localhost:8000/docs`.
 | `LOG_LEVEL` | Nivel de logging; la salida es JSON, una línea por evento |
 | `LLM_API_KEY` | Clave del proveedor del LLM (Groq). Sin ella `POST /capturas` responde 503 y la app usa el formulario manual |
 | `LLM_MODEL`, `LLM_BASE_URL`, `LLM_TIMEOUT_S` | Modelo (por defecto `openai/gpt-oss-20b`), URL compatible con OpenAI y tiempo máximo por llamada |
+| `LIMITES_ACTIVOS` | `true` por defecto; `false` apaga los límites de tasa (lo usan las pruebas) |
+| `LIMITE_LOGIN_POR_MIN`, `LIMITE_CAPTURAS_POR_MIN`, `LIMITE_RESUMEN_POR_MIN` | Peticiones por minuto: 10, 20 y 10 por defecto; `0` desactiva ese límite |
 
 ## API (fase 1)
 
@@ -140,6 +142,41 @@ corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mens
 Requiere las migraciones 000 a 010 de `kairo-bd`. Variables nuevas: `TELEGRAM_BOT_TOKEN`,
 `TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET` (mínimo 32 caracteres aleatorios). Con
 cualquiera de los dos secretos vacío, su endpoint rechaza todo.
+
+## API (fase 5)
+
+| Ruta | Función |
+|---|---|
+| `GET /reportes/agenda` | Actividades abiertas con vencimiento futuro y eventos que no han terminado, en orden. Parámetros `dias` (1 a 90, 7 por defecto) y `limite` (1 a 200, 50) |
+| `GET /reportes/carga-semanal` | Por semana y materia: actividades con vencimiento, pendientes y minutos registrados. `semanas_atras` (3) y `semanas_adelante` (4) |
+| `GET /reportes/metas` | Progreso de las metas activas en su periodo actual, con `porcentaje` y `cumplida` |
+| `GET /reportes/pipeline` | Desempeño de la captura por IA: total, aceptadas, corregidas, descartadas y porcentaje aceptado sin corrección, por tipo de entidad |
+| `GET /reportes/carga-vs-descanso` | Por semana: minutos académicos, de sueño y de ejercicio junto con ánimo y satisfacción. `semanas` (1 a 52, 8) |
+| `GET /reportes/resumen` | Reúne las cifras anteriores y pide al LLM un texto breve |
+
+- **Las cifras vienen de SQL.** Los reportes leen vistas de `kairo-bd` que filtran por el usuario de la sesión.
+  El LLM solo redacta: recibe las cifras sin identificadores y con títulos recortados a 80 caracteres.
+- **El texto se verifica.** Si contiene un número que no está en las cifras, se descarta: `texto` sale
+  `null` y `motivo_sin_texto` vale `texto_no_verificado`. Si el proveedor falla o no está configurado,
+  la respuesta trae las cifras igualmente (`motivo_sin_texto` con la causa o `sin_configurar`).
+
+### Seguridad
+
+- Todas las consultas corren con el rol `kairo_app`, sin `DELETE` (salvo `actividad_etiqueta`) ni DDL, y con RLS.
+- Los logs no incluyen texto de mensajes ni el token del bot (los clientes `httpx` se registran solo desde `WARNING`).
+- Los errores usan siempre `{"codigo", "detalle"}`.
+
+### Límites de tasa
+
+Ventana deslizante de 60 s en memoria, por proceso. `POST /auth/login` se limita por correo y por origen
+(el triple del límite), `POST /capturas` (y el bot) por usuario y `GET /reportes/resumen` por usuario.
+Al excederse responde 429 `demasiadas_peticiones` con `Retry-After`. Con varias instancias cada una
+cuenta por separado. Detrás de Render se confía en `X-Forwarded-For` (`--proxy-headers`).
+
+El contrato completo está en `docs/openapi.json`; se regenera con
+`uv run python -m scripts.exportar_openapi` y una prueba falla si está desactualizado.
+
+Requiere las migraciones 000 a 011 de `kairo-bd`.
 
 ## Estructura
 

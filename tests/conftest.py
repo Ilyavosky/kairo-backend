@@ -21,6 +21,7 @@ async def pool() -> AsyncIterator[Pool]:
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("DB_ROLE", "kairo_app")
+    monkeypatch.setenv("LIMITES_ACTIVOS", "false")
     get_settings.cache_clear()
     with TestClient(create_app()) as client:
         yield client

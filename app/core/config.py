@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     interno_secret: str = ""
+    limites_activos: bool = True
+    limite_login_por_min: int = 10
+    limite_capturas_por_min: int = 20
+    limite_resumen_por_min: int = 10
 
     @property
     def cors_origins_list(self) -> list[str]:

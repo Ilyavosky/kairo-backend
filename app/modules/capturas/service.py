@@ -7,7 +7,9 @@ from psycopg.rows import DictRow
 from pydantic import BaseModel, ValidationError
 
 from app.core.auth import Contexto
+from app.core.config import get_settings
 from app.core.errors import ErrorApi
+from app.core.limites import verificar
 from app.modules.actividades import repository as actividades
 from app.modules.actividades.schemas import ActividadIn
 from app.modules.capturas import repository
@@ -35,6 +37,7 @@ def _salida(fila: DictRow) -> CapturaOut:
 
 
 async def crear(ctx: Contexto, extractor: Extractor, texto: str) -> CapturaOut:
+    verificar("capturas", str(ctx.usuario_id), get_settings().limite_capturas_por_min)
     conn = ctx.conn
     ahora = datetime.now(UTC)
     zona = ZoneInfo(await repository.zona_horaria(conn, ctx.usuario_id))

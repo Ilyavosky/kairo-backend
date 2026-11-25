@@ -30,7 +30,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configurar_logging(settings.log_level)
 
-    app = FastAPI(title="Kairo API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Kairo API", version="1.0.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
