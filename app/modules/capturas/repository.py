@@ -166,3 +166,15 @@ async def metricas(conn: Conexion) -> list[DictRow]:
         "group by t.entidad_tipo order by t.entidad_tipo"
     )
     return await cur.fetchall()
+
+
+async def modalidad_propuesta(conn: Conexion, captura_id: UUID) -> str | None:
+    cur = await conn.execute(
+        "select propuesta->>'modalidad' as modalidad from extraccion where id = %s",
+        (captura_id,),
+    )
+    fila = await cur.fetchone()
+    if fila is None:
+        return None
+    valor: str | None = fila["modalidad"]
+    return valor

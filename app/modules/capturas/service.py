@@ -185,3 +185,12 @@ async def descartar(ctx: Contexto, captura_id: UUID) -> CapturaOut:
     actual = await repository.obtener(ctx.conn, captura_id)
     assert actual is not None
     return _salida(actual)
+
+
+async def confirmar_con(
+    ctx: Contexto, captura_id: UUID, complementos: dict[str, Any]
+) -> CapturaOut:
+    fila, pendiente = await _bloquear_pendiente(ctx, captura_id)
+    if not pendiente:
+        return _salida(fila)
+    return await _cerrar_con_fila(ctx, fila, {**fila["campos"], **complementos}, [])
