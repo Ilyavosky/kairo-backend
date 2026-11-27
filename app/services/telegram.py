@@ -5,6 +5,7 @@ import httpx
 from app.core.config import Settings
 
 Boton = tuple[str, str]
+BOTONES_POR_FILA = 3
 
 
 class TelegramError(Exception):
@@ -53,8 +54,11 @@ class ClienteTelegramHttp:
                 "inline_keyboard": [
                     [
                         {"text": etiqueta, "callback_data": dato}
-                        for etiqueta, dato in botones
+                        for etiqueta, dato in botones[
+                            inicio : inicio + BOTONES_POR_FILA
+                        ]
                     ]
+                    for inicio in range(0, len(botones), BOTONES_POR_FILA)
                 ]
             }
         await self._llamar("sendMessage", cuerpo)
