@@ -16,7 +16,7 @@ from tests.doble_telegram import (
     usar_telegram,
     vincular,
 )
-from tests.helpers import Sesion, crear_actividad
+from tests.helpers import Sesion, crear_actividad, ejecutar_como_administrador
 
 RECORDATORIOS = "/api/v1/recordatorios"
 
@@ -217,8 +217,13 @@ def test_el_texto_del_recordatorio_incluye_el_tipo_del_evento(
 
 @pytest.fixture
 def rol_despachador(monkeypatch: pytest.MonkeyPatch) -> None:
+    ejecutar_como_administrador(
+        "alter role kairo_despachador password 'prueba-despachador'"
+    )
     base = get_settings().database_url
-    destino = base.replace("postgres:postgres@", "kairo_despachador@")
+    destino = base.replace(
+        "postgres:postgres@", "kairo_despachador:prueba-despachador@"
+    )
     monkeypatch.setenv("DATABASE_URL_WORKER", destino)
     get_settings.cache_clear()
 
