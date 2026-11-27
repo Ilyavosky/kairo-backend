@@ -16,9 +16,11 @@ COLUMNAS = (
     "lugar",
     "inicio",
     "fin",
+    "tipo",
+    "actividad_id",
     "creado_en",
 )
-ANULABLES = frozenset({"descripcion", "lugar", "materia_id"})
+ANULABLES = frozenset({"descripcion", "lugar", "materia_id", "actividad_id"})
 
 
 async def listar(
@@ -26,6 +28,7 @@ async def listar(
     desde: datetime | None,
     hasta: datetime | None,
     materia_id: UUID | None,
+    tipo: str | None,
     limite: int,
     desplazamiento: int,
 ) -> list[DictRow]:
@@ -34,6 +37,7 @@ async def listar(
         "where (%(desde)s::timestamptz is null or fin >= %(desde)s) "
         "and (%(hasta)s::timestamptz is null or inicio <= %(hasta)s) "
         "and (%(materia_id)s::uuid is null or materia_id = %(materia_id)s) "
+        "and (%(tipo)s::text is null or tipo = %(tipo)s) "
         "order by inicio, id "
         "limit %(limite)s offset %(desplazamiento)s"
     ).format(columnas(COLUMNAS))
@@ -43,6 +47,7 @@ async def listar(
             "desde": desde,
             "hasta": hasta,
             "materia_id": materia_id,
+            "tipo": tipo,
             "limite": limite,
             "desplazamiento": desplazamiento,
         },
@@ -61,8 +66,8 @@ async def obtener(conn: Conexion, evento_id: UUID) -> DictRow | None:
 async def crear(conn: Conexion, usuario_id: UUID, datos: EventoIn) -> DictRow:
     consulta = sql.SQL(
         "insert into evento_calendario (usuario_id, materia_id, titulo, "
-        "descripcion, lugar, inicio, fin) "
-        "values (%s, %s, %s, %s, %s, %s, %s) returning {}"
+        "descripcion, lugar, inicio, fin, tipo, actividad_id) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) returning {}"
     ).format(columnas(COLUMNAS))
     cur = await conn.execute(
         consulta,
@@ -74,6 +79,8 @@ async def crear(conn: Conexion, usuario_id: UUID, datos: EventoIn) -> DictRow:
             datos.lugar,
             datos.inicio,
             datos.fin,
+            datos.tipo,
+            datos.actividad_id,
         ),
     )
     fila = await cur.fetchone()

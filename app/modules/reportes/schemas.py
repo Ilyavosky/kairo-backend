@@ -15,6 +15,7 @@ class AgendaItem(BaseModel):
     cuando: datetime
     prioridad: int | None
     estado: str | None
+    subtipo: Literal["clase", "examen", "entrega", "reunion", "personal"] | None
 
 
 class CargaSemanalItem(BaseModel):

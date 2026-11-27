@@ -23,6 +23,13 @@ LIMITE_BOTONES = 6
 LIMITE_AGENDA = 30
 BUSQUEDA = 50
 ARTICULOS = frozenset({"el", "la", "los", "las", "del", "mis", "una", "con"})
+SUBTIPOS = {
+    "clase": "clase",
+    "examen": "examen",
+    "entrega": "entrega",
+    "reunion": "reunión",
+    "personal": "evento",
+}
 Rango = Literal["hoy", "manana", "semana"]
 
 
@@ -91,7 +98,9 @@ async def agenda(ctx: Contexto, rango: Rango) -> Respuesta:
         if rango == "semana" and local.date() != dia_actual:
             dia_actual = local.date()
             lineas.append(dia_legible(local, zona))
-        etiqueta = " (evento)" if fila["tipo"] == "evento" else ""
+        etiqueta = ""
+        if fila["tipo"] == "evento":
+            etiqueta = f" ({SUBTIPOS.get(fila['subtipo'], 'evento')})"
         materia = f" · {fila['materia']}" if fila["materia"] else ""
         lineas.append(f"• {local:%H:%M} {fila['titulo']}{etiqueta}{materia}")
     if rango == "hoy":

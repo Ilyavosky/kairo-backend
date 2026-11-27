@@ -11,7 +11,7 @@ LUNES_ACTUAL = (
 async def agenda(conn: Conexion, dias: int, limite: int) -> list[DictRow]:
     cur = await conn.execute(
         "select tipo, id, titulo, materia_id, materia, categoria, cuando, "
-        "prioridad, estado from v_agenda_proxima "
+        "prioridad, estado, subtipo from v_agenda_proxima "
         "where cuando <= now() + make_interval(days => %s) "
         "order by cuando, tipo, id limit %s",
         (dias, limite),

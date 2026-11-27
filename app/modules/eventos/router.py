@@ -7,7 +7,7 @@ from pydantic import AwareDatetime
 from app.core.auth import Ctx
 from app.core.errors import ErrorApi
 from app.modules.eventos import repository
-from app.modules.eventos.schemas import EventoIn, EventoOut, EventoPatch
+from app.modules.eventos.schemas import EventoIn, EventoOut, EventoPatch, TipoEvento
 
 router = APIRouter(prefix="/eventos", tags=["eventos"])
 
@@ -22,11 +22,12 @@ async def listar(
     desde: AwareDatetime | None = None,
     hasta: AwareDatetime | None = None,
     materia_id: UUID | None = None,
+    tipo: TipoEvento | None = None,
     limite: Annotated[int, Query(ge=1, le=200)] = 50,
     desplazamiento: Annotated[int, Query(ge=0)] = 0,
 ) -> list[EventoOut]:
     filas = await repository.listar(
-        ctx.conn, desde, hasta, materia_id, limite, desplazamiento
+        ctx.conn, desde, hasta, materia_id, tipo, limite, desplazamiento
     )
     return [EventoOut.model_validate(f) for f in filas]
 

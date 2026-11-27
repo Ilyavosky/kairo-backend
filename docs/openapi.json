@@ -1057,6 +1057,29 @@
             }
           },
           {
+            "name": "tipo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "clase",
+                    "examen",
+                    "entrega",
+                    "reunion",
+                    "personal"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tipo"
+            }
+          },
+          {
             "name": "limite",
             "in": "query",
             "required": false,
@@ -3574,6 +3597,24 @@
               }
             ],
             "title": "Estado"
+          },
+          "subtipo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "clase",
+                  "examen",
+                  "entrega",
+                  "reunion",
+                  "personal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtipo"
           }
         },
         "type": "object",
@@ -3586,7 +3627,8 @@
           "categoria",
           "cuando",
           "prioridad",
-          "estado"
+          "estado",
+          "subtipo"
         ],
         "title": "AgendaItem"
       },
@@ -4269,6 +4311,30 @@
               }
             ],
             "title": "Materia Id"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "clase",
+              "examen",
+              "entrega",
+              "reunion",
+              "personal"
+            ],
+            "title": "Tipo",
+            "default": "personal"
+          },
+          "actividad_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actividad Id"
           }
         },
         "additionalProperties": false,
@@ -4335,6 +4401,29 @@
             "format": "date-time",
             "title": "Fin"
           },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "clase",
+              "examen",
+              "entrega",
+              "reunion",
+              "personal"
+            ],
+            "title": "Tipo"
+          },
+          "actividad_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actividad Id"
+          },
           "creado_en": {
             "type": "string",
             "format": "date-time",
@@ -4350,6 +4439,8 @@
           "lugar",
           "inicio",
           "fin",
+          "tipo",
+          "actividad_id",
           "creado_en"
         ],
         "title": "EventoOut"
@@ -4429,6 +4520,36 @@
               }
             ],
             "title": "Materia Id"
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "clase",
+                  "examen",
+                  "entrega",
+                  "reunion",
+                  "personal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          },
+          "actividad_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actividad Id"
           }
         },
         "additionalProperties": false,

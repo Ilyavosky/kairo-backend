@@ -43,7 +43,7 @@ async def agenda_entre(
     conn: Conexion, desde: datetime, hasta: datetime, limite: int
 ) -> list[DictRow]:
     cur = await conn.execute(
-        "select tipo, id, titulo, materia, cuando from v_agenda_proxima "
+        "select tipo, id, titulo, materia, cuando, subtipo from v_agenda_proxima "
         "where cuando >= %s and cuando < %s order by cuando, tipo, id limit %s",
         (desde, hasta, limite),
     )
