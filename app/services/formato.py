@@ -30,3 +30,8 @@ def fecha_legible(valor: str, zona: ZoneInfo, ahora: datetime) -> str:
     if local.year != ahora.astimezone(zona).year:
         texto += f" {local.year}"
     return f"{texto}, {local:%H:%M}"
+
+
+def dia_legible(momento: datetime, zona: ZoneInfo) -> str:
+    local = momento.astimezone(zona)
+    return f"{DIAS[local.weekday()]} {local.day} {MESES[local.month - 1]}"
