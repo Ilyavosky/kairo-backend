@@ -33,4 +33,7 @@ router = APIRouter(
 async def despachar_recordatorios(
     request: Request, telegram: TelegramDep
 ) -> ResultadoDespacho:
+    pool_despacho = request.app.state.pool_despacho
+    if pool_despacho is not None:
+        return await despachar(pool_despacho, telegram, rol_propio=True)
     return await despachar(request.app.state.pool, telegram)

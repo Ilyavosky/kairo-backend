@@ -7,6 +7,7 @@ from app.core.auth import Ctx
 from app.core.config import get_settings
 from app.core.errors import ErrorApi
 from app.modules.capturas.router import ExtractorDep
+from app.modules.reportes.router import RedactorDep
 from app.modules.telegram import bot, repository
 from app.modules.telegram.codigos import VIGENCIA_MINUTOS, generar_codigo, hash_codigo
 from app.modules.telegram.schemas import ActualizacionTelegram, VinculoOut
@@ -45,7 +46,10 @@ async def webhook(
     actualizacion: ActualizacionTelegram,
     request: Request,
     extractor: ExtractorDep,
+    redactor: RedactorDep,
     telegram: TelegramDep,
 ) -> dict[str, bool]:
-    await bot.procesar(request.app.state.pool, extractor, telegram, actualizacion)
+    await bot.procesar(
+        request.app.state.pool, extractor, redactor, telegram, actualizacion
+    )
     return {"ok": True}

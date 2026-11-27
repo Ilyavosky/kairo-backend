@@ -107,7 +107,9 @@ def test_elegir_la_modalidad_guarda_la_actividad_sin_contar_como_correccion(
     en_linea = botones[1][1]
     enviar(client, boton(tid, en_linea))
     enviar(client, boton(tid, en_linea))
-    assert "Guardado. Modalidad: En línea." in telegram.textos(tid)[-1]
+    guardado = telegram.textos(tid)[-1]
+    assert "Listo, guardé la actividad" in guardado
+    assert "• Modalidad: En línea" in guardado
     actividades = listar_actividades(client, ana)
     assert [(a["titulo"], a["modalidad"]) for a in actividades] == [
         ("Entregar reporte", "en_linea")
@@ -190,9 +192,10 @@ def test_si_falta_un_dato_no_se_pregunta_la_modalidad(
     usar_extractor(client, ExtractorFalso(actividad("Entregar", categoria=None)))
     enviar(client, mensaje(tid, "entregar algo"))
     _, texto, botones = telegram.enviados[-1]
-    assert "Falta: categoría" in texto
+    assert "¿En qué categoría va?" in texto
     assert "¿Qué modalidad" not in texto
-    assert botones is not None and [b[0] for b in botones] == ["Descartar"]
+    assert botones is not None and botones[-1][0] == "Descartar"
+    assert all(b[1].startswith("k:") for b in botones[:-1])
 
 
 def test_registro_de_tiempo_y_meta_tambien_salen_legibles(

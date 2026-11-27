@@ -2,6 +2,7 @@ import random
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,7 +16,7 @@ from tests.doble_telegram import (
     usar_telegram,
     vincular,
 )
-from tests.helpers import Sesion, crear_actividad
+from tests.helpers import Sesion, crear_actividad, ejecutar_como_administrador
 
 RECORDATORIOS = "/api/v1/recordatorios"
 
@@ -174,3 +175,91 @@ def test_un_fallo_se_recupera_en_el_siguiente_ciclo(
     client.post(DESPACHAR, headers=INTERNO)
     final = estado(client, ana, id_)
     assert final["estado_envio"] == "enviado" and final["intentos"] == 2
+
+
+def programar_evento(client: TestClient, sesion: Sesion, tipo: str, titulo: str) -> str:
+    inicio = datetime.now(UTC) + timedelta(hours=2)
+    evento = client.post(
+        "/api/v1/eventos",
+        json={
+            "titulo": titulo,
+            "inicio": inicio.isoformat(),
+            "fin": (inicio + timedelta(hours=1)).isoformat(),
+            "tipo": tipo,
+        },
+        headers=sesion.headers,
+    ).json()["id"]
+    respuesta = client.post(
+        RECORDATORIOS,
+        json={
+            "evento_id": evento,
+            "momento": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+        },
+        headers=sesion.headers,
+    )
+    assert respuesta.status_code == 201, respuesta.text
+    return str(respuesta.json()["id"])
+
+
+def test_el_texto_del_recordatorio_incluye_el_tipo_del_evento(
+    client: TestClient, telegram: TelegramFalso, ana: Sesion
+) -> None:
+    tid = nuevo_id()
+    vincular(client, ana, telegram, tid)
+    programar_evento(client, ana, "examen", "Redes unidad 2")
+    programar_evento(client, ana, "personal", "Dentista")
+    antes = len(telegram.enviados)
+    client.post(DESPACHAR, headers=INTERNO)
+    textos = [t for c, t, _ in telegram.enviados[antes:] if c == tid]
+    assert any(t.startswith("Recordatorio (examen): Redes unidad 2") for t in textos)
+    assert any(t.startswith("Recordatorio: Dentista empieza") for t in textos)
+
+
+@pytest.fixture
+def rol_despachador(monkeypatch: pytest.MonkeyPatch) -> None:
+    ejecutar_como_administrador(
+        "alter role kairo_despachador password 'prueba-despachador'"
+    )
+    base = get_settings().database_url
+    destino = base.replace(
+        "postgres:postgres@", "kairo_despachador:prueba-despachador@"
+    )
+    monkeypatch.setenv("DATABASE_URL_WORKER", destino)
+    get_settings.cache_clear()
+
+
+def conexiones_de(rol: str) -> int:
+    with psycopg.connect(get_settings().database_url, autocommit=True) as conn:
+        cur = conn.execute(
+            "select count(*) from pg_stat_activity where usename = %s", (rol,)
+        )
+        fila = cur.fetchone()
+        assert fila is not None
+        total: int = fila[0]
+        return total
+
+
+def test_con_url_de_despacho_el_envio_usa_el_rol_propio(
+    rol_despachador: None,
+    client: TestClient,
+    telegram: TelegramFalso,
+    ana: Sesion,
+) -> None:
+    tid = nuevo_id()
+    vincular(client, ana, telegram, tid)
+    id_ = programar(client, ana, titulo="Entregar proyecto")
+    respuesta = client.post(DESPACHAR, headers=INTERNO)
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["enviados"] >= 1
+    assert estado(client, ana, id_)["estado_envio"] == "enviado"
+    assert conexiones_de("kairo_despachador") >= 1
+
+
+def test_sin_url_de_despacho_no_se_abre_ninguna_conexion_del_rol(
+    client: TestClient, telegram: TelegramFalso, ana: Sesion
+) -> None:
+    tid = nuevo_id()
+    vincular(client, ana, telegram, tid)
+    programar(client, ana)
+    client.post(DESPACHAR, headers=INTERNO)
+    assert client.app.state.pool_despacho is None  # type: ignore[attr-defined]

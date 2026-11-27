@@ -1,10 +1,10 @@
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from psycopg.rows import DictRow
 from pydantic import ValidationError
 
 from app.core.auth import Contexto
@@ -16,8 +16,10 @@ from app.modules.capturas import repository as capturas_repo
 from app.modules.capturas import service as capturas
 from app.modules.capturas.schemas import CapturaOut
 from app.modules.metas import repository as metas
-from app.modules.telegram import repository
+from app.modules.telegram import comandos, intenciones, repository
 from app.modules.telegram.codigos import hash_codigo
+from app.modules.telegram.intenciones import Intencion
+from app.modules.telegram.respuesta import Respuesta
 from app.modules.telegram.schemas import (
     ActualizacionTelegram,
     CallbackTelegram,
@@ -26,33 +28,48 @@ from app.modules.telegram.schemas import (
 from app.modules.temporizador import repository as temporizador
 from app.services.extraccion import Extractor
 from app.services.formato import fecha_legible
+from app.services.resumen import Redactor
 from app.services.telegram import Boton, ClienteTelegram, TelegramError
 from app.services.texto import normalizar
 
 logger = logging.getLogger("kairo.telegram")
 
 LIMITE_MENSAJE = 1000
+MINUTOS_BORRADOR = 15
+MAX_PALABRAS_TITULO = 8
 AYUDA = (
-    "Escribe lo que necesitas en lenguaje natural, por ejemplo: "
-    "'entregar el reporte de redes el viernes a las 6'.\n\n"
+    "Escríbeme en lenguaje natural y lo registro. Por ejemplo:\n"
+    "• entregar el reporte de redes el viernes a las 6\n"
+    "• estudié 2 horas de bases de datos\n"
+    "• quiero estudiar 10 horas por semana\n\n"
+    "También entiendo preguntas como 'qué me hace falta', 'qué tengo hoy' "
+    "o 'cómo voy'.\n\n"
     "Comandos:\n"
-    "/tarea <título> crea una tarea\n"
-    "/timer inicia el temporizador de Estudio\n"
-    "/timer <categoría> inicia el temporizador de esa categoría\n"
-    "/timer stop lo detiene y guarda el tiempo\n"
+    "/pendientes lista lo que tienes por hacer\n"
+    "/hoy, /manana y /semana muestran tu agenda\n"
+    "/completar <texto> marca una actividad como hecha\n"
+    "/tarea <título> crea una tarea rápida\n"
+    "/timer <categoría> inicia el temporizador y /timer stop lo detiene\n"
     "/meta muestra el progreso de tus metas\n"
+    "/resumen te da un resumen de tu semana\n"
+    "/materias y /categorias muestran tus catálogos\n"
+    "/cancelar descarta el borrador en curso\n"
     "/ayuda muestra este mensaje"
+)
+SALUDO = (
+    "Hola. Cuéntame qué necesitas: puedo registrar actividades, tiempo y metas, "
+    "o mostrarte tus pendientes. Escribe /ayuda para ver ejemplos."
+)
+PREGUNTA = (
+    "No estoy seguro de cómo ayudarte con eso. Puedo mostrarte tus pendientes "
+    "(/pendientes), tu agenda (/hoy, /semana) o tus metas (/meta). Para "
+    "registrar algo, escríbelo como instrucción, por ejemplo: 'entregar el "
+    "reporte de redes el viernes a las 6'."
 )
 SIN_VINCULO = (
     "Esta cuenta de Telegram no está vinculada a Kairo. "
     "En la app genera un código de vinculación y envíame /vincular CODIGO."
 )
-
-
-@dataclass(frozen=True)
-class Respuesta:
-    texto: str
-    botones: list[Boton] | None = None
 
 
 ETIQUETAS = {
@@ -123,44 +140,152 @@ def _valor_legible(
     return str(valor)
 
 
-async def _resumen_captura(
-    ctx: Contexto, captura: CapturaOut, preguntar_modalidad: bool = False
-) -> Respuesta:
-    nombres_entidad = {
-        "actividad": "una actividad",
-        "registro_tiempo": "un registro de tiempo",
-        "meta": "una meta",
+REQUERIDOS: dict[str, frozenset[str]] = {
+    "actividad": frozenset({"titulo", "categoria_id"}),
+    "registro_tiempo": frozenset({"categoria_id", "inicio", "fin"}),
+    "meta": frozenset({"categoria_id", "objetivo"}),
+}
+OPCIONALES = {
+    "vence_en": "la fecha",
+    "materia_id": "la materia",
+    "prioridad": "la prioridad",
+}
+PISTAS = {
+    "registro_tiempo": (
+        "Dímelo de nuevo con el detalle, por ejemplo: "
+        "'estudié 2 horas de bases de datos'."
+    ),
+    "meta": (
+        "Dímelo de nuevo con la cantidad y el periodo, por ejemplo: "
+        "'quiero estudiar 10 horas por semana'."
+    ),
+    "actividad": "Dímelo de nuevo con más detalle o complétalo en la app.",
+}
+ENTIDADES_ARTICULO = {
+    "actividad": "la actividad",
+    "registro_tiempo": "el registro de tiempo",
+    "meta": "la meta",
+}
+PALABRAS_DE_FECHA = frozenset(
+    {
+        "hoy",
+        "manana",
+        "pasado",
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo",
+        "semana",
+        "proxima",
+        "proximo",
+        "mes",
     }
+)
+
+
+def _faltantes(entidad_tipo: str, pendientes: list[str]) -> list[str]:
+    return [p for p in pendientes if p in REQUERIDOS[entidad_tipo]]
+
+
+def _unir(partes: list[str]) -> str:
+    if len(partes) <= 1:
+        return "".join(partes)
+    return ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def _categorias_ordenadas(
+    categorias: list[tuple[UUID, str]],
+) -> list[tuple[UUID, str]]:
+    return sorted(categorias, key=lambda c: normalizar(c[1]))
+
+
+async def _formato(ctx: Contexto) -> tuple[ZoneInfo, dict[str, str], datetime]:
     zona = ZoneInfo(await capturas_repo.zona_horaria(ctx.conn, ctx.usuario_id))
     catalogo = [
         *await capturas_repo.categorias(ctx.conn),
         *await capturas_repo.materias_activas(ctx.conn),
     ]
     nombres = {str(identificador): nombre for identificador, nombre in catalogo}
-    ahora = datetime.now(UTC)
-    omitidos = {"modalidad"} if preguntar_modalidad else set()
-    lineas = [f"Entendí {nombres_entidad[captura.entidad_tipo]}:"]
-    for campo in ORDEN[captura.entidad_tipo]:
-        valor = captura.campos.get(campo)
-        if valor is None or campo in omitidos:
+    return zona, nombres, datetime.now(UTC)
+
+
+def _lineas_campos(
+    entidad_tipo: str,
+    campos: dict[str, Any],
+    nombres: dict[str, str],
+    zona: ZoneInfo,
+    ahora: datetime,
+    omitidos: set[str] | None = None,
+) -> list[str]:
+    lineas = []
+    for campo in ORDEN[entidad_tipo]:
+        valor = campos.get(campo)
+        if valor is None or campo in (omitidos or set()):
             continue
         legible = _valor_legible(campo, valor, nombres, zona, ahora)
         lineas.append(f"• {ETIQUETAS[campo]}: {legible}")
+    return lineas
+
+
+async def _resumen_captura(
+    ctx: Contexto, captura: CapturaOut, preguntar_modalidad: bool = False
+) -> Respuesta:
+    zona, nombres, ahora = await _formato(ctx)
+    omitidos = {"modalidad"} if preguntar_modalidad else set()
+    entendido = ENTIDADES_ARTICULO[captura.entidad_tipo].replace("la ", "una ", 1)
+    entendido = entendido.replace("el ", "un ", 1)
+    lineas = [f"Entendí {entendido}:"]
+    lineas += _lineas_campos(
+        captura.entidad_tipo, captura.campos, nombres, zona, ahora, omitidos
+    )
     descartar: Boton = ("Descartar", f"d:{captura.id}")
-    if captura.pendientes:
-        faltantes = ", ".join(ETIQUETAS.get(p, p).lower() for p in captura.pendientes)
-        lineas.append("Falta: " + faltantes)
-        lineas.append("Complétalo en la app o descarta este borrador.")
+    faltan = _faltantes(captura.entidad_tipo, captura.pendientes)
+    if "titulo" in faltan:
+        lineas.append("")
+        lineas.append(
+            "Me falta el título. ¿Cómo se llama? Respóndeme con el nombre y la guardo."
+        )
         return Respuesta("\n".join(lineas), [descartar])
+    if faltan == ["categoria_id"]:
+        lineas.append("")
+        lineas.append("¿En qué categoría va? Elige una:")
+        categorias = _categorias_ordenadas(await capturas_repo.categorias(ctx.conn))
+        opciones: list[Boton] = [
+            (nombre, f"k:{captura.id}:{indice}")
+            for indice, (_, nombre) in enumerate(categorias)
+        ]
+        return Respuesta("\n".join(lineas), [*opciones, descartar])
+    if faltan:
+        etiquetas = [ETIQUETAS.get(p, p).lower() for p in faltan]
+        lineas.append("")
+        lineas.append(f"Me falta: {_unir(etiquetas)}. {PISTAS[captura.entidad_tipo]}")
+        return Respuesta("\n".join(lineas), [descartar])
+    opcionales = [OPCIONALES[p] for p in captura.pendientes if p in OPCIONALES]
+    if opcionales:
+        lineas.append("")
+        lineas.append(f"No pude interpretar {_unir(opcionales)}; se guardará sin eso.")
     if preguntar_modalidad:
         lineas.append("¿Qué modalidad tiene? Elige una para guardarla.")
-        opciones: list[Boton] = [
+        modalidades: list[Boton] = [
             (NOMBRES_MODALIDAD[nombre], f"m:{captura.id}:{letra}")
             for letra, nombre in MODALIDADES.items()
         ]
-        return Respuesta("\n".join(lineas), [*opciones, descartar])
+        return Respuesta("\n".join(lineas), [*modalidades, descartar])
     lineas.append("¿Lo guardo?")
     return Respuesta("\n".join(lineas), [("Confirmar", f"c:{captura.id}"), descartar])
+
+
+async def _guardado(
+    ctx: Contexto, captura: CapturaOut, complementos: dict[str, Any] | None = None
+) -> Respuesta:
+    zona, nombres, ahora = await _formato(ctx)
+    campos = {**captura.campos, **(complementos or {})}
+    lineas = [f"Listo, guardé {ENTIDADES_ARTICULO[captura.entidad_tipo]}:"]
+    lineas += _lineas_campos(captura.entidad_tipo, campos, nombres, zona, ahora)
+    return Respuesta("\n".join(lineas))
 
 
 async def _vincular(conn: Conexion, telegram_id: int, codigo: str) -> Respuesta:
@@ -234,20 +359,180 @@ async def _metas(ctx: Contexto) -> Respuesta:
     return Respuesta("\n".join(lineas) if lineas else "No tienes metas activas.")
 
 
-async def _captura(ctx: Contexto, extractor: Extractor, texto: str) -> Respuesta:
-    if len(texto) > LIMITE_MENSAJE:
-        return Respuesta(f"El mensaje es muy largo; el máximo es {LIMITE_MENSAJE}.")
-    captura = await capturas.crear(ctx, extractor, texto)
+async def _responder_captura(ctx: Contexto, captura: CapturaOut) -> Respuesta:
     sin_modalidad = (
         captura.entidad_tipo == "actividad"
-        and not captura.pendientes
+        and not _faltantes(captura.entidad_tipo, captura.pendientes)
         and await capturas_repo.modalidad_propuesta(ctx.conn, captura.id) is None
     )
     return await _resumen_captura(ctx, captura, sin_modalidad)
 
 
+async def _captura(ctx: Contexto, extractor: Extractor, texto: str) -> Respuesta:
+    captura = await capturas.crear(ctx, extractor, texto)
+    return await _responder_captura(ctx, captura)
+
+
+def _es_pregunta(texto: str) -> bool:
+    limpio = texto.strip()
+    return limpio.endswith("?") or limpio.startswith("¿")
+
+
+def _parece_titulo(texto: str) -> bool:
+    palabras = intenciones.limpiar(texto).split()
+    return (
+        0 < len(palabras) <= MAX_PALABRAS_TITULO
+        and not _es_pregunta(texto)
+        and not any(p.isdigit() or p in PALABRAS_DE_FECHA for p in palabras)
+    )
+
+
+async def _borrador(ctx: Contexto) -> DictRow | None:
+    return await capturas_repo.ultima_pendiente(ctx.conn, MINUTOS_BORRADOR)
+
+
+async def _confirmar_borrador(ctx: Contexto) -> Respuesta:
+    borrador = await _borrador(ctx)
+    if borrador is None:
+        return Respuesta(
+            "No tengo nada pendiente por confirmar. Cuéntame qué quieres registrar."
+        )
+    captura = await capturas.obtener(ctx, borrador["id"])
+    if _faltantes(captura.entidad_tipo, captura.pendientes) or (
+        captura.entidad_tipo == "actividad"
+        and await capturas_repo.modalidad_propuesta(ctx.conn, captura.id) is None
+    ):
+        return await _responder_captura(ctx, captura)
+    cerrada = await capturas.confirmar(ctx, captura.id)
+    return await _guardado(ctx, cerrada)
+
+
+async def _cancelar_borrador(ctx: Contexto) -> Respuesta:
+    borrador = await _borrador(ctx)
+    if borrador is None:
+        return Respuesta("No hay nada que cancelar.")
+    await capturas.descartar(ctx, borrador["id"])
+    return Respuesta("Listo, descarté el borrador.")
+
+
+async def _categoria_por_defecto(ctx: Contexto) -> UUID | None:
+    categorias = await capturas_repo.categorias(ctx.conn)
+    return next((i for i, n in categorias if normalizar(n) == "tarea"), None)
+
+
+async def _titulo_del_borrador(
+    ctx: Contexto, borrador: DictRow, texto: str
+) -> Respuesta:
+    complementos: dict[str, Any] = {"titulo": texto.strip()[:200]}
+    if "categoria_id" in borrador["pendientes"]:
+        categoria = await _categoria_por_defecto(ctx)
+        if categoria is None:
+            return Respuesta(
+                "No pude asignarle una categoría. Complétala en la app o descarta "
+                "el borrador."
+            )
+        complementos["categoria_id"] = str(categoria)
+    captura = await capturas.confirmar_con(ctx, borrador["id"], complementos)
+    return await _guardado(ctx, captura, complementos)
+
+
+async def _por_intencion(
+    ctx: Contexto, redactor: Redactor, detectada: intenciones.Detectada
+) -> Respuesta | None:
+    intencion = detectada.intencion
+    if intencion is Intencion.AYUDA:
+        return Respuesta(AYUDA)
+    if intencion is Intencion.SALUDO:
+        return Respuesta(SALUDO)
+    if intencion is Intencion.GRACIAS:
+        return Respuesta("A ti. Aquí sigo si necesitas algo más.")
+    if intencion is Intencion.PENDIENTES:
+        return await comandos.pendientes(ctx)
+    if intencion is Intencion.HOY:
+        return await comandos.agenda(ctx, "hoy")
+    if intencion is Intencion.MANANA:
+        return await comandos.agenda(ctx, "manana")
+    if intencion is Intencion.SEMANA:
+        return await comandos.agenda(ctx, "semana")
+    if intencion is Intencion.METAS:
+        return await _metas(ctx)
+    if intencion is Intencion.RESUMEN:
+        return await comandos.resumen(ctx, redactor)
+    if intencion is Intencion.CANCELAR:
+        return await _cancelar_borrador(ctx)
+    if intencion is Intencion.CONFIRMAR:
+        return await _confirmar_borrador(ctx)
+    if intencion is Intencion.TIMER_DETENER:
+        return await _timer(ctx, "stop")
+    if intencion is Intencion.TIMER_INICIAR:
+        return await _timer(ctx, detectada.argumento)
+    return await comandos.completar(ctx, detectada.argumento, True)
+
+
+async def _texto_libre(
+    ctx: Contexto, extractor: Extractor, redactor: Redactor, texto: str
+) -> Respuesta:
+    if len(texto) > LIMITE_MENSAJE:
+        return Respuesta(f"El mensaje es muy largo; el máximo es {LIMITE_MENSAJE}.")
+    detectada = intenciones.detectar(texto)
+    if detectada is not None:
+        respuesta = await _por_intencion(ctx, redactor, detectada)
+        if respuesta is not None:
+            return respuesta
+    borrador = await _borrador(ctx)
+    if (
+        borrador is not None
+        and borrador["entidad_tipo"] == "actividad"
+        and "titulo" in borrador["pendientes"]
+        and _parece_titulo(texto)
+    ):
+        return await _titulo_del_borrador(ctx, borrador, texto)
+    if _es_pregunta(texto):
+        return Respuesta(PREGUNTA)
+    return await _captura(ctx, extractor, texto)
+
+
+async def _comando(
+    ctx: Contexto, redactor: Redactor, comando: str, resto: str
+) -> Respuesta:
+    nombre = normalizar(comando)
+    if nombre == "/ayuda":
+        return Respuesta(AYUDA)
+    if nombre == "/tarea":
+        return await _tarea(ctx, resto)
+    if nombre == "/timer":
+        return await _timer(ctx, resto)
+    if nombre in {"/meta", "/metas"}:
+        return await _metas(ctx)
+    if nombre in {"/pendientes", "/pend"}:
+        return await comandos.pendientes(ctx)
+    if nombre == "/hoy":
+        return await comandos.agenda(ctx, "hoy")
+    if nombre == "/manana":
+        return await comandos.agenda(ctx, "manana")
+    if nombre in {"/semana", "/agenda"}:
+        return await comandos.agenda(ctx, "semana")
+    if nombre in {"/completar", "/hecho"}:
+        respuesta = await comandos.completar(ctx, resto, False)
+        assert respuesta is not None
+        return respuesta
+    if nombre == "/resumen":
+        return await comandos.resumen(ctx, redactor)
+    if nombre == "/cancelar":
+        return await _cancelar_borrador(ctx)
+    if nombre == "/materias":
+        return await comandos.materias(ctx)
+    if nombre == "/categorias":
+        return await comandos.categorias(ctx)
+    return Respuesta("No conozco ese comando. Escribe /ayuda.")
+
+
 async def _atender(
-    conn: Conexion, extractor: Extractor, telegram_id: int, texto: str
+    conn: Conexion,
+    extractor: Extractor,
+    redactor: Redactor,
+    telegram_id: int,
+    texto: str,
 ) -> Respuesta:
     comando, _, resto = texto.partition(" ")
     comando = comando.split("@")[0].lower()
@@ -259,25 +544,17 @@ async def _atender(
         return Respuesta(SIN_VINCULO)
     await fijar_usuario(conn, usuario_id)
     ctx = Contexto(conn=conn, usuario_id=usuario_id)
-    if comando == "/ayuda":
-        return Respuesta(AYUDA)
-    if comando == "/tarea":
-        return await _tarea(ctx, resto)
-    if comando == "/timer":
-        return await _timer(ctx, resto)
-    if comando == "/meta":
-        return await _metas(ctx)
     if comando.startswith("/"):
-        return Respuesta("No conozco ese comando. Escribe /ayuda.")
-    return await _captura(ctx, extractor, texto)
+        return await _comando(ctx, redactor, comando, resto)
+    return await _texto_libre(ctx, extractor, redactor, texto)
 
 
 async def _ejecutar(
-    pool: Pool, extractor: Extractor, telegram_id: int, texto: str
+    pool: Pool, extractor: Extractor, redactor: Redactor, telegram_id: int, texto: str
 ) -> Respuesta:
     try:
         async with transaccion(pool) as conn:
-            return await _atender(conn, extractor, telegram_id, texto)
+            return await _atender(conn, extractor, redactor, telegram_id, texto)
     except ErrorApi as exc:
         return Respuesta(exc.detalle)
     except Exception:
@@ -297,13 +574,14 @@ async def _enviar(
 async def _mensaje(
     pool: Pool,
     extractor: Extractor,
+    redactor: Redactor,
     telegram: ClienteTelegram,
     mensaje: MensajeTelegram,
 ) -> None:
     if mensaje.remitente is None or not mensaje.text or not mensaje.text.strip():
         return
     respuesta = await _ejecutar(
-        pool, extractor, mensaje.remitente.id, mensaje.text.strip()
+        pool, extractor, redactor, mensaje.remitente.id, mensaje.text.strip()
     )
     await _enviar(telegram, mensaje.chat.id, respuesta)
 
@@ -312,21 +590,30 @@ async def _resolver_callback(
     conn: Conexion,
     telegram_id: int,
     accion: str,
-    captura_id: UUID,
-    modalidad: str | None = None,
+    objetivo: UUID,
+    extra: str = "",
 ) -> Respuesta:
     usuario_id = await repository.usuario_por_telegram(conn, telegram_id)
     if usuario_id is None:
         return Respuesta(SIN_VINCULO)
     await fijar_usuario(conn, usuario_id)
     ctx = Contexto(conn=conn, usuario_id=usuario_id)
-    if accion == "m" and modalidad is not None:
-        await capturas.confirmar_con(ctx, captura_id, {"modalidad": modalidad})
-        return Respuesta(f"Guardado. Modalidad: {NOMBRES_MODALIDAD[modalidad]}.")
+    if accion == "f":
+        return await comandos.marcar_completada(ctx, objetivo)
+    if accion in {"m", "k"}:
+        if accion == "m":
+            complemento: dict[str, Any] = {"modalidad": MODALIDADES[extra]}
+        else:
+            categorias = _categorias_ordenadas(await capturas_repo.categorias(conn))
+            indice = int(extra)
+            if indice >= len(categorias):
+                return Respuesta("Esa categoría ya no está disponible. Elige otra.")
+            complemento = {"categoria_id": str(categorias[indice][0])}
+        captura = await capturas.confirmar_con(ctx, objetivo, complemento)
+        return await _guardado(ctx, captura, complemento)
     if accion == "c":
-        await capturas.confirmar(ctx, captura_id)
-        return Respuesta("Guardado.")
-    await capturas.descartar(ctx, captura_id)
+        return await _guardado(ctx, await capturas.confirmar(ctx, objetivo))
+    await capturas.descartar(ctx, objetivo)
     return Respuesta("Descartado.")
 
 
@@ -338,22 +625,23 @@ async def _callback(
     except TelegramError as exc:
         logger.warning("no se pudo responder el callback: %s", exc)
     accion, _, dato = (callback.data or "").partition(":")
-    modalidad: str | None = None
-    if accion == "m":
-        dato, _, letra = dato.partition(":")
-        modalidad = MODALIDADES.get(letra)
-        if modalidad is None:
-            return
-    try:
-        captura_id = UUID(dato)
-    except ValueError:
+    if accion not in {"c", "d", "m", "k", "f"}:
         return
-    if accion not in {"c", "d", "m"}:
+    extra = ""
+    if accion in {"m", "k"}:
+        dato, _, extra = dato.partition(":")
+    if (accion == "m" and extra not in MODALIDADES) or (
+        accion == "k" and not extra.isdigit()
+    ):
+        return
+    try:
+        objetivo = UUID(dato)
+    except ValueError:
         return
     try:
         async with transaccion(pool) as conn:
             respuesta = await _resolver_callback(
-                conn, callback.remitente.id, accion, captura_id, modalidad
+                conn, callback.remitente.id, accion, objetivo, extra
             )
     except ErrorApi as exc:
         respuesta = Respuesta(exc.detalle)
@@ -367,10 +655,11 @@ async def _callback(
 async def procesar(
     pool: Pool,
     extractor: Extractor,
+    redactor: Redactor,
     telegram: ClienteTelegram,
     actualizacion: ActualizacionTelegram,
 ) -> None:
     if actualizacion.message is not None:
-        await _mensaje(pool, extractor, telegram, actualizacion.message)
+        await _mensaje(pool, extractor, redactor, telegram, actualizacion.message)
     elif actualizacion.callback_query is not None:
         await _callback(pool, telegram, actualizacion.callback_query)

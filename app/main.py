@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, v1
 from app.core.config import get_settings
-from app.core.db import crear_pool
+from app.core.db import crear_pool, crear_pool_despacho
 from app.core.errors import registrar_manejadores
 from app.core.logging import configurar_logging
 
@@ -17,12 +17,19 @@ logger = logging.getLogger("kairo.http")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    pool = crear_pool(get_settings())
+    settings = get_settings()
+    pool = crear_pool(settings)
     await pool.open()
     app.state.pool = pool
+    pool_despacho = crear_pool_despacho(settings)
+    if pool_despacho is not None:
+        await pool_despacho.open(wait=False)
+    app.state.pool_despacho = pool_despacho
     try:
         yield
     finally:
+        if pool_despacho is not None:
+            await pool_despacho.close()
         await pool.close()
 
 

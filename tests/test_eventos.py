@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from tests.helpers import Sesion
+from tests.helpers import Sesion, crear_actividad
 
 URL = "/api/v1/eventos"
 MATERIAS = "/api/v1/materias"
@@ -137,3 +137,76 @@ def test_un_usuario_no_ve_ni_edita_eventos_ajenos(
         client.patch(url, json={"titulo": "robado"}, headers=beto.headers).status_code
         == 404
     )
+
+
+def test_el_tipo_por_defecto_es_personal_y_acepta_los_cinco_valores(
+    client: TestClient, ana: Sesion
+) -> None:
+    assert crear(client, ana)["tipo"] == "personal"
+    for tipo in ("clase", "examen", "entrega", "reunion", "personal"):
+        assert crear(client, ana, tipo=tipo)["tipo"] == tipo
+
+
+def test_un_tipo_invalido_responde_422_limpio(client: TestClient, ana: Sesion) -> None:
+    respuesta = client.post(
+        URL,
+        json={"titulo": "x", "inicio": INICIO, "fin": FIN, "tipo": "fiesta"},
+        headers=ana.headers,
+    )
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "validacion"
+    evento = crear(client, ana)
+    nulo = client.patch(
+        f"{URL}/{evento['id']}", json={"tipo": None}, headers=ana.headers
+    )
+    assert nulo.status_code == 422
+    assert nulo.json()["codigo"] == "campo_no_nulo"
+
+
+def test_el_evento_se_liga_a_una_actividad_propia(
+    client: TestClient, ana: Sesion
+) -> None:
+    actividad = crear_actividad(client, ana, "Proyecto final")
+    evento = crear(client, ana, tipo="entrega", actividad_id=actividad)
+    assert evento["actividad_id"] == actividad
+    quitado = client.patch(
+        f"{URL}/{evento['id']}", json={"actividad_id": None}, headers=ana.headers
+    )
+    assert quitado.status_code == 200 and quitado.json()["actividad_id"] is None
+    cambiado = client.patch(
+        f"{URL}/{evento['id']}", json={"tipo": "examen"}, headers=ana.headers
+    )
+    assert cambiado.json()["tipo"] == "examen"
+
+
+def test_no_se_puede_ligar_a_la_actividad_de_otro_usuario(
+    client: TestClient, ana: Sesion, beto: Sesion
+) -> None:
+    ajena = crear_actividad(client, beto, "De Beto")
+    respuesta = client.post(
+        URL,
+        json={"titulo": "x", "inicio": INICIO, "fin": FIN, "actividad_id": ajena},
+        headers=ana.headers,
+    )
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "referencia_invalida"
+    inexistente = client.post(
+        URL,
+        json={
+            "titulo": "x",
+            "inicio": INICIO,
+            "fin": FIN,
+            "actividad_id": "00000000-0000-0000-0000-000000000000",
+        },
+        headers=ana.headers,
+    )
+    assert inexistente.status_code == 422
+
+
+def test_filtro_por_tipo(client: TestClient, ana: Sesion) -> None:
+    clase = crear(client, ana, titulo="Clase", tipo="clase")
+    crear(client, ana, titulo="Examen", tipo="examen")
+    solo_clases = client.get(f"{URL}?tipo=clase", headers=ana.headers).json()
+    assert [e["id"] for e in solo_clases] == [clase["id"]]
+    invalido = client.get(f"{URL}?tipo=fiesta", headers=ana.headers)
+    assert invalido.status_code == 422

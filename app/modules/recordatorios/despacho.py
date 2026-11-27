@@ -12,6 +12,12 @@ from app.services.telegram import ClienteTelegram, TelegramError
 logger = logging.getLogger("kairo.despacho")
 
 MAX_INTENTOS = 3
+ETIQUETAS_EVENTO = {
+    "clase": "clase",
+    "examen": "examen",
+    "entrega": "entrega",
+    "reunion": "reunión",
+}
 LOTE = 20
 
 PENDIENTES = """
@@ -27,7 +33,8 @@ select
         else 'meta'
     end as tipo,
     coalesce(a.titulo, e.titulo, c.nombre) as titulo,
-    coalesce(a.vence_en, e.inicio) as cuando
+    coalesce(a.vence_en, e.inicio) as cuando,
+    e.tipo as subtipo
 from recordatorio as r
 inner join usuario as u on r.usuario_id = u.id
 left join actividad as a on r.actividad_id = a.id
@@ -63,7 +70,9 @@ def _texto(fila: DictRow) -> str:
         local = cuando.astimezone(ZoneInfo(fila["zona_horaria"]))
         fecha = local.strftime("%d/%m %H:%M")
     if fila["tipo"] == "evento":
-        return f"Recordatorio: {titulo} empieza el {fecha}."
+        etiqueta = ETIQUETAS_EVENTO.get(fila["subtipo"])
+        prefijo = f"Recordatorio ({etiqueta})" if etiqueta else "Recordatorio"
+        return f"{prefijo}: {titulo} empieza el {fecha}."
     if fila["tipo"] == "meta":
         return (
             f"Recordatorio: revisa tu meta de {titulo}. Usa /meta para ver el avance."
@@ -112,10 +121,13 @@ async def _atender(
     conteo.enviados += 1
 
 
-async def despachar(pool: Pool, telegram: ClienteTelegram) -> ResultadoDespacho:
+async def despachar(
+    pool: Pool, telegram: ClienteTelegram, rol_propio: bool = False
+) -> ResultadoDespacho:
     conteo = Conteo()
     async with transaccion(pool) as conn:
-        await conn.execute("set local role kairo_worker")
+        if not rol_propio:
+            await conn.execute("set local role kairo_worker")
         cur = await conn.execute(PENDIENTES, (MAX_INTENTOS, LOTE))
         filas = await cur.fetchall()
         for fila in filas:

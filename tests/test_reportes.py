@@ -196,3 +196,23 @@ def test_valida_los_parametros(
 ) -> None:
     respuesta = client.get(f"{BASE}/{ruta}", params=params, headers=ana.headers)
     assert respuesta.status_code == 422
+
+
+def test_la_agenda_indica_el_tipo_del_evento_y_no_el_de_las_actividades(
+    client: TestClient, ana: Sesion
+) -> None:
+    sembrar(client, ana)
+    client.post(
+        "/api/v1/eventos",
+        json={
+            "titulo": "Examen de redes",
+            "inicio": en(hours=30),
+            "fin": en(hours=32),
+            "tipo": "examen",
+        },
+        headers=ana.headers,
+    )
+    agenda = {a["titulo"]: a for a in obtener(client, ana, "agenda")}
+    assert agenda["Examen de redes"]["subtipo"] == "examen"
+    assert agenda["Clase de redes"]["subtipo"] == "personal"
+    assert agenda["Reporte de redes"]["subtipo"] is None

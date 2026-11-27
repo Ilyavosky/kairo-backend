@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     db_pool_min_size: int = 1
     db_pool_max_size: int = 5
     db_role: str = ""
+    database_url_worker: str = ""
+    db_pool_worker_max_size: int = 2
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60

@@ -178,3 +178,14 @@ async def modalidad_propuesta(conn: Conexion, captura_id: UUID) -> str | None:
         return None
     valor: str | None = fila["modalidad"]
     return valor
+
+
+async def ultima_pendiente(conn: Conexion, minutos: int) -> DictRow | None:
+    cur = await conn.execute(
+        "select id, entidad_tipo, pendientes, resuelta as campos, creada_en "
+        "from extraccion where estado = 'pendiente' "
+        "and creada_en > now() - make_interval(mins => %s) "
+        "order by creada_en desc limit 1",
+        (minutos,),
+    )
+    return await cur.fetchone()
