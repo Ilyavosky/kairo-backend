@@ -27,7 +27,8 @@ La documentación interactiva queda en `http://localhost:8000/docs`.
 | `APP_ENV` | `development`, `test` o `production`. En producción `JWT_SECRET` es obligatorio |
 | `DATABASE_URL` | Cadena de conexión a PostgreSQL, con TLS en Supabase |
 | `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE` | Tamaño del pool de conexiones |
-| `DB_ROLE` | Rol al que cambia cada conexión (`set role`); las pruebas usan `kairo_app` para que la RLS aplique |
+| `DB_ROLE` | Rol al que cambia cada conexión (`set role`). Déjalo vacío cuando `DATABASE_URL` ya entra con un rol de login propio (`kairo_api`); las pruebas usan `kairo_app` para que la RLS aplique |
+| `DATABASE_URL_WORKER`, `DB_POOL_WORKER_MAX_SIZE` | Conexión del despacho de recordatorios con el rol `kairo_despachador` (pool de hasta 2 conexiones). Si está vacía, el despacho usa el pool principal con `set local role kairo_worker` |
 | `JWT_SECRET` | Al menos 32 caracteres en producción; en desarrollo hay uno por defecto |
 | `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES` | Parámetros del token de acceso |
 | `CORS_ORIGINS` | Orígenes permitidos, separados por coma |
@@ -125,7 +126,9 @@ corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mens
   fija la función `kairo_vincular_telegram`, y un Telegram que ya pertenece a otra cuenta no
   consume el código.
 - **El bot es un adaptador.** Un Telegram sin vincular solo recibe instrucciones. Una vez
-  vinculado: `/tarea <título>`, `/timer [categoría|stop]`, `/meta`, `/ayuda`. El texto libre pasa
+  vinculado: `/tarea <título>`, `/timer [categoría|stop]`, `/meta`, `/pendientes`, `/hoy`,
+  `/manana`, `/semana`, `/completar [texto]`, `/resumen`, `/materias`, `/categorias`, `/cancelar` y
+  `/ayuda`. El texto libre pasa
   por el mismo pipeline de `/capturas` y el bot responde con botones Confirmar y Descartar que
   llaman a los mismos servicios. Si falla el proveedor de IA, el bot lo dice y no guarda nada.
 - **Mensajes legibles.** El bot muestra fechas como `vie 27 nov, 23:59` en la zona del usuario y los
@@ -133,8 +136,16 @@ corrección con mensajes reales: `uv run python -m scripts.medir_extraccion mens
   actividad, pregunta con botones (Presencial, En línea, Mixta) y guarda al elegir; esa elección
   no cuenta como corrección en las métricas del pipeline. `/start CODIGO` vincula igual que
   `/vincular CODIGO`, para abrir el bot desde la app con `https://t.me/<bot>?start=CODIGO`.
-- **Despacho.** Corre con `set local role kairo_worker`, que solo puede leer lo necesario para armar
-  el texto y actualizar `estado_envio`, `intentos`, `enviado_en` y `ultimo_error`. Toma hasta 20
+- **Conversación.** Antes de llamar al modelo, el bot reconoce frases de consulta y control ("qué me
+  hace falta", "qué tengo hoy", "cómo voy", "ya terminé el reporte", "sí", "no", "inicia el timer")
+  con reglas deterministas, sin costo de IA y sin crear borradores. Una pregunta que no reconoce
+  se contesta con orientación en lugar de generar un borrador vacío. Si a un borrador le falta el
+  título, el bot lo pide y la siguiente respuesta corta lo completa (con la categoría Tarea si
+  tampoco había categoría); si solo falta la categoría, la elige con botones. Los datos opcionales
+  que no se pudieron interpretar (fecha, materia, prioridad) no bloquean el guardado: el bot avisa
+  y guarda sin ellos. Los borradores se tratan como vigentes durante 15 minutos.
+- **Despacho.** Con `DATABASE_URL_WORKER` conecta como `kairo_despachador` (miembro de `kairo_worker`), sin `set role`; sin esa variable corre con `set local role kairo_worker` en el pool principal. El rol solo puede leer lo necesario para armar
+  el texto (incluido el tipo del evento, que se antepone: «Recordatorio (examen): …») y actualizar `estado_envio`, `intentos`, `enviado_en` y `ultimo_error`. Toma hasta 20
   pendientes vencidos con `for update skip locked`, de modo que dos ejecuciones simultáneas no
   envían lo mismo. Un fallo se reintenta en el siguiente ciclo y al tercero queda `fallido`; un
   usuario sin Telegram queda `fallido` de inmediato.
@@ -232,5 +243,5 @@ RLS no se aplica y no probarían nada.
 
 `render.yaml` define un servicio web con Docker y `healthCheckPath: /health`. Variables
 que se capturan a mano en Render: `DATABASE_URL` (cadena del pooler de Supabase con
-`sslmode=require`), `JWT_SECRET`, `CORS_ORIGINS`, `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET`. El plan gratuito se apaga a los 15
+`sslmode=require`; en producción, con el rol `kairo_api` por el puerto 6543 y `DB_ROLE` vacío), `DATABASE_URL_WORKER` (rol `kairo_despachador`), `JWT_SECRET`, `CORS_ORIGINS`, `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` e `INTERNO_SECRET`. El plan gratuito se apaga a los 15
 minutos sin tráfico y la primera petición tarda cerca de un minuto.
