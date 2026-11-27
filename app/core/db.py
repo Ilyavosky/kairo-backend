@@ -35,6 +35,20 @@ def crear_pool(settings: Settings) -> Pool:
     )
 
 
+def crear_pool_despacho(settings: Settings) -> Pool | None:
+    if not settings.database_url_worker:
+        return None
+    return AsyncConnectionPool(
+        settings.database_url_worker,
+        connection_class=AsyncConnection[DictRow],
+        min_size=0,
+        max_size=settings.db_pool_worker_max_size,
+        open=False,
+        timeout=5.0,
+        kwargs={"row_factory": dict_row, "prepare_threshold": None},
+    )
+
+
 @asynccontextmanager
 async def transaccion(pool: Pool) -> AsyncIterator[Conexion]:
     async with pool.connection() as conn, conn.transaction():
